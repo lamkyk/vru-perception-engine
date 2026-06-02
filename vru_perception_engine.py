@@ -4,236 +4,295 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # --- CONFIGURATION & PAGE SETUP ---
-st.set_page_config(page_title="VRU Perception V&V Engine", page_icon="👁️", layout="wide")
+st.set_page_config(page_title="Ultra-VRU Perception V&V Suite", page_icon="👁️", layout="wide")
 
-# --- SYSTEMS ENGINEERING REQUIREMENTS (VRU SAFETY ENVELOPE) ---
+# --- SYSTEMS ENGINEERING PASS/FAIL CRITERIA ---
 SYS_REQS = {
-    "min_confidence": 0.85,       # AI must be 85% sure it sees a human
-    "min_iou": 0.70,              # Bounding box must overlap the actual human by 70%
-    "critical_ttc_seconds": 2.5,  # If TTC drops below 2.5s, AEB (Auto-Braking) engages
-    "max_critical_fn": 0          # ZERO False Negatives allowed inside the Critical TTC window
+    "min_confidence": 0.88,       # High bar for VRU classification certainty
+    "min_iou": 0.75,              # Bounding box precision requirement to prevent phantom braking
+    "critical_ttc_seconds": 3.0,  # Pre-crash safety envelope boundary
+    "max_allowable_dropouts": 2,  # Maximum continuous frames allowed to fail inside danger zone
 }
 
-# --- DATA GENERATION (Simulating a Vehicle Approaching a VRU) ---
+# --- STOCHASTIC SIMULATION MATHEMATICS ---
 @st.cache_data
-def simulate_vru_approach(ego_speed_mph, vru_type, lighting, occlusion):
-    """Simulates 10 seconds (100 frames at 10Hz) of perception tracking during a VRU approach."""
-    np.random.seed(42)
-    frames = 100
-    time_sec = np.linspace(0, 10, frames)
+def run_high_fidelity_vru_sim(ego_speed_mph, vru_type, occlusion_state, environment_state):
+    """
+    Simulates a high-fidelity 15-second tracking sequence (150 frames at 10Hz)
+    mapping complex physics, sensory attenuation, and spatial tracking profiles.
+    """
+    np.random.seed(1337) # Lock seed for deterministic regression testing
+    frames = 150
+    time_sec = np.linspace(0, 15, frames)
     
-    # Ego vehicle speed in meters per second (m/s)
-    ego_speed_ms = ego_speed_mph * 0.44704 
+    # Kinematics translation
+    ego_speed_ms = ego_speed_mph * 0.44704
+    start_distance = 160 # Start farther out to capture tracking initialization
+    distance_m = start_distance - (ego_speed_ms * time_sec)
+    distance_m = np.clip(distance_m, 0.2, start_distance)
     
-    # Distance closes over time. Start at 120 meters.
-    distance_m = 120 - (ego_speed_ms * time_sec)
-    distance_m = np.clip(distance_m, 0.1, 120) # Prevent negative distance
+    ttc_sec = np.where(ego_speed_ms > 0, distance_m / ego_speed_ms, 99.0)
     
-    # Time to Collision (TTC)
-    ttc_sec = distance_m / ego_speed_ms
+    # --- COMBINATORIAL EDGE-CASE PROFILES ---
+    # Baseline sensory coefficients
+    coef_conf = 1.0
+    coef_iou = 1.0
+    noise_sigma = 0.05
     
-    # --- EDGE CASE DEGRADATION MODIFIERS ---
-    mod_conf = 1.0
-    mod_iou = 1.0
-    
-    # Lighting degrades confidence (AI struggles to classify pixels)
-    if lighting == "Dusk/Dawn (Low Sun Glare)":
-        mod_conf = 0.75
-    elif lighting == "Night (Unlit Road)":
-        mod_conf = 0.55
-        
-    # Occlusion degrades IoU (AI can't draw a tight box if the legs are hidden by a parked car)
-    if occlusion == "Partial (Behind Parked Cars)":
-        mod_iou = 0.80
-    elif occlusion == "Severe (Emerging from Blind Alley)":
-        mod_iou = 0.50
-        mod_conf = 0.60 # Also hurts confidence
+    # 1. Target Geometry Modifiers
+    if vru_type == "Prone Pedestrian (Fallen/Injured)":
+        coef_conf, coef_iou = 0.70, 0.65  # Low aspect ratio breaks standard anchor boxes
+    elif vru_type == "Child (Upright, Small Stature)":
+        coef_conf, coef_iou = 0.80, 0.80  # Low pixel height decreases classifier weight
+    elif vru_type == "Prone Child (Fallen/Low Profile)":
+        coef_conf, coef_iou = 0.55, 0.50  # Extreme edge case; highly unrepresented in training data
+    elif vru_type == "Domestic Animal (Canine/Feline)":
+        coef_conf, coef_iou = 0.75, 0.70  # Erratic four-legged kinematics
+    elif vru_type == "Large Animal (Deer/Wildlife)":
+        coef_conf, coef_iou = 0.85, 0.75  # High height but thin bounds split spatial groupings
+    elif vru_type == "Stroller / Wheelchair User":
+        coef_conf, coef_iou = 0.80, 0.65  # Complex visual occlusion compound structures
 
-    # Small targets are harder to track
-    if vru_type == "Child (Small Stature)":
-        mod_conf *= 0.85
-        mod_iou *= 0.85
-        
-    # Generate Telemetry Streams
-    # Confidence increases as distance decreases (closer = easier to see)
-    base_conf = np.clip(1.0 - (distance_m / 200), 0.1, 1.0)
-    confidence = np.clip((base_conf * mod_conf) + np.random.normal(0, 0.08, frames), 0.05, 0.99)
+    # 2. Spatial Occlusion Profiles
+    if occlusion_state == "Partially Hidden (10% - 40%)":
+        coef_iou *= 0.85
+    elif occlusion_state == "Severely Occluded (40% - 80%)":
+        coef_iou *= 0.55
+        coef_conf *= 0.80
+    elif occlusion_state == "Intermittent (Cross-Traffic)":
+        noise_sigma = 0.18 # Drastically amplify tracking noise variance
+    elif occlusion_state == "Sudden Emergence (Blind Alley)":
+        # Force 0 detection until target clears the occlusion zone at close range
+        coef_conf *= 0.20 
+        coef_iou *= 0.15
+
+    # 3. Environmental Attenuation Profiles
+    if environment_state == "Dusk / Dawn (Low Sun Glare)":
+        coef_conf *= 0.75 # Sensor saturation
+    elif environment_state == "Night (Active Headlights Only)":
+        coef_conf *= 0.60
+        noise_sigma += 0.04
+    elif environment_state == "Night with High-Beam Glare":
+        coef_conf *= 0.45 # Saturated pixel arrays
+    elif environment_state == "Heavy Spray / Splash-back":
+        coef_conf *= 0.70
+        coef_iou *= 0.70 # Lens refraction errors
+
+    # --- TIME-SERIES SYNTHESIS ---
+    # Detection confidence naturally scales up as target approaches sensory focal ranges
+    range_factor = np.clip(1.0 - (distance_m / start_distance), 0.1, 1.0)
+    confidence = (range_factor * coef_conf) + np.random.normal(0, noise_sigma, frames)
+    confidence = np.clip(confidence, 0.02, 0.98)
     
-    # IoU fluctuates but generally suffers from occlusion
-    iou = np.clip((0.95 * mod_iou) + np.random.normal(0, 0.1, frames), 0.1, 0.99)
+    iou = (0.92 * coef_iou) + np.random.normal(0, 0.08, frames)
+    iou = np.clip(iou, 0.01, 0.99)
     
-    # Simulate a "Ghosting" dropout event (hardware hiccup)
-    if lighting != "Clear Daylight" or occlusion != "Clear Line of Sight":
-        dropout_start = np.random.randint(40, 60)
-        confidence[dropout_start:dropout_start+5] -= 0.40 # 500ms sensor dropout
-        
+    # Overwrite sudden emergence masking logic
+    if occlusion_state == "Sudden Emergence (Blind Alley)":
+        # Target pops out precisely 4 seconds into the timeline
+        hidden_indices = time_sec < 4.0
+        confidence[hidden_indices] = np.random.uniform(0.01, 0.08, size=np.sum(hidden_indices))
+        iou[hidden_indices] = np.random.uniform(0.01, 0.10, size=np.sum(hidden_indices))
+        # Immediate tracking initialization spike
+        recovery_indices = time_sec >= 4.0
+        confidence[recovery_indices] = np.clip(confidence[recovery_indices] * 4.5, 0.05, 0.96)
+        iou[recovery_indices] = np.clip(iou[recovery_indices] * 5.0, 0.05, 0.94)
+
+    # Intermittent masking dropouts (cross-traffic passing)
+    if occlusion_state == "Intermittent (Cross-Traffic)":
+        dropout_blocks = [range(20, 30), range(75, 85)]
+        for block in dropout_blocks:
+            confidence[block] = np.random.uniform(0.02, 0.12, len(block))
+            iou[block] = np.random.uniform(0.01, 0.15, len(block))
+
     return pd.DataFrame({
         "Time_s": time_sec,
         "Distance_m": distance_m,
         "TTC_s": ttc_sec,
-        "Detection_Confidence": confidence,
-        "Bounding_Box_IoU": iou
+        "Confidence": confidence,
+        "IoU": iou
     })
 
 # --- UI ARCHITECTURE ---
-st.title("VRU Perception Stack Validation Engine")
-st.markdown("Automated edge-case evaluation for Vulnerable Road User (VRU) detection, focusing on Time-to-Collision (TTC) safety envelopes.")
+st.title("VRU Perception Detection & Safety Verification Suite")
+st.markdown("Automated combinatorial edge-case verification for low-profile, occluded, and vulnerable road entities.")
 
 tab_runner, tab_analytics = st.tabs([
-    "⚙️ Edge Case Simulator & V&V Runner", 
-    "📊 Executive Safety Analytics"
+    "⚙️ Combinatorial Edge-Case Runner", 
+    "📊 Executive Diagnostics & Verification"
 ])
 
 # ==========================================
-# TAB 1: SIMULATOR & RUNNER
+# TAB 1: RUNNER
 # ==========================================
 with tab_runner:
-    st.header("Scenario Configuration Matrix")
+    st.header("Scenario Parameter Matrix")
     
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.subheader("Kinematics")
-        ego_speed = st.slider(
-            "Ego Vehicle Speed (mph)", 15, 65, 35, 5,
-            help="Velocity of the autonomous vehicle. Higher speeds drastically compress the Time-to-Collision (TTC) window, requiring the AI to detect the VRU at much further distances to safely stop."
+    col_vru, col_occ, col_env = st.columns(3)
+    
+    with col_vru:
+        st.subheader("Target Entity Profile")
+        sim_vru = st.selectbox(
+            "Classification Category",
+            [
+                "Adult Pedestrian (Upright)",
+                "Prone Pedestrian (Fallen/Injured)",
+                "Child (Upright, Small Stature)",
+                "Prone Child (Fallen/Low Profile)",
+                "Cyclist (Lateral Crossing)",
+                "E-Scooter Rider (High Velocity)",
+                "Domestic Animal (Canine/Feline)",
+                "Large Animal (Deer/Wildlife)",
+                "Stroller / Wheelchair User"
+            ],
+            help="Defines the kinematic boundaries, structural dimensions, and aspect ratio signatures used for model classification evaluation."
         )
-    with c2:
-        st.subheader("Target Profile")
-        vru_class = st.selectbox(
-            "VRU Classification", 
-            ["Adult Pedestrian", "Cyclist (Lateral Crossing)", "Child (Small Stature)"],
-            help="Changes the pixel density and radar cross-section of the target. Children represent extreme edge cases due to their unpredictable kinematics and low camera profile."
-        )
-    with c3:
-        st.subheader("Environmental Occlusion")
-        lighting = st.selectbox(
-            "Ambient Lighting", 
-            ["Clear Daylight", "Dusk/Dawn (Low Sun Glare)", "Night (Unlit Road)"],
-            help="Modulates optical sensor saturation. Low sun glare can completely blind camera optics, forcing reliance on LiDAR/Radar fusion."
-        )
-        occlusion = st.selectbox(
-            "Spatial Occlusion", 
-            ["Clear Line of Sight", "Partial (Behind Parked Cars)", "Severe (Emerging from Blind Alley)"],
-            help="Simulates physical obstructions. Partial occlusion drastically lowers Bounding Box IoU (spatial accuracy) because the AI cannot predict the full geometry of the human body."
+        sim_speed = st.slider(
+            "Chassis Approach Velocity (mph)", 10, 75, 35, 5,
+            help="Chassis velocity directly alters distance compression rates, tightening required latency bounds for network inference."
         )
         
+    with col_occ:
+        st.subheader("Spatial Occlusion Layer")
+        sim_occlusion = st.selectbox(
+            "Obstruction Configuration",
+            [
+                "Clear Line of Sight (0% Occlusion)",
+                "Partially Hidden (10% - 40%)",
+                "Severely Occluded (40% - 80%)",
+                "Intermittent (Cross-Traffic)",
+                "Sudden Emergence (Blind Alley)"
+            ],
+            help="Simulates visual boundaries. Sub-surface obstruction significantly limits ground-truth bounding box matching (IoU)."
+        )
+        
+    with col_env:
+        st.subheader("Environmental Context")
+        sim_env = st.selectbox(
+            "Atmospheric & Lighting State",
+            [
+                "Clear Daylight (100% Illumination)",
+                "Dusk / Dawn (Low Sun Glare)",
+                "Night (Active Headlights Only)",
+                "Night with High-Beam Glare",
+                "Heavy Spray / Splash-back"
+            ],
+            help="Modulates external lighting profiles to stress camera sensor arrays and back-end neural feature extractors."
+        )
+
     st.divider()
     
-    col_run, col_reqs = st.columns([1, 1])
-    with col_run:
-        run_test = st.button("▶ Execute VRU Tracking Simulation", type="primary", use_container_width=True)
-        st.caption("Executes a 100-frame (10-second) kinematic approach simulation.")
+    col_btn, col_sys_rules = st.columns([1, 1])
+    with col_btn:
+        run_sim = st.button("▶ Run Perception Regression Test", type="primary", use_container_width=True)
+        st.caption("Processes a 150-frame time-series approach mapping the active configurations against systems validation floors.")
         
-    with col_reqs:
-        with st.expander("View Strict VRU Safety Requirements", expanded=True):
+    with col_sys_rules:
+        with st.expander("Systems Engineering Safety Boundary Specifications", expanded=True):
             st.info(
-                f"**Critical Safety Envelopes:**\n\n"
-                f"1. **Detection Floor:** Confidence must exceed **>{SYS_REQS['min_confidence']*100}%**.\n"
-                f"2. **Spatial Accuracy (IoU):** Bounding box overlap must exceed **>{SYS_REQS['min_iou']*100}%** to prevent false steering actuation.\n"
-                f"3. **Zero-Tolerance Window:** If Time-to-Collision (TTC) is under **{SYS_REQS['critical_ttc_seconds']}s**, a single frame dropping below the Detection Floor triggers a **Catastrophic Safety Failure**."
+                f"**Verification Checkpoints:**\n\n"
+                f"1. **Core Detection Threshold:** Multi-modal classification must remain **>={SYS_REQS['min_confidence']*100}%**.\n"
+                f"2. **Spatial Alignment Floor:** Bounding box Intersection over Union (IoU) target is **>={SYS_REQS['min_iou']*100}%**.\n"
+                f"3. **Zero-Tolerance Safety Window:** Inside a critical Time-to-Collision (TTC) of **{SYS_REQS['critical_ttc_seconds']}s**, "
+                f"consecutive drops in classification confidence flag an immediate structural regression."
             )
 
-    if run_test:
-        with st.spinner('Generating pixel-level tracking data...'):
-            df = simulate_vru_approach(ego_speed, vru_class, lighting, occlusion)
+    if run_sim:
+        with st.spinner("Compiling time-series tracking metrics..."):
+            sim_data = run_high_fidelity_vru_sim(sim_speed, sim_vru, sim_occlusion, sim_env)
             
-            # --- EVALUATION LOGIC ---
-            # 1. Total frames where confidence was too low
-            low_conf_frames = df[df["Detection_Confidence"] < SYS_REQS['min_confidence']]
+            # Compute evaluation passes
+            danger_zone = sim_data[sim_data["TTC_s"] <= SYS_REQS['critical_ttc_seconds']]
+            failed_safety_frames = danger_zone[danger_zone["Confidence"] < SYS_REQS['min_confidence']]
+            failed_iou_frames = sim_data[sim_data["IoU"] < SYS_REQS['min_iou']]
             
-            # 2. Total frames where IoU was too low
-            low_iou_frames = df[df["Bounding_Box_IoU"] < SYS_REQS['min_iou']]
-            
-            # 3. CRITICAL: False Negatives inside the Danger Zone (TTC < 2.5s)
-            danger_zone = df[df["TTC_s"] < SYS_REQS['critical_ttc_seconds']]
-            critical_failures = danger_zone[danger_zone["Detection_Confidence"] < SYS_REQS['min_confidence']]
-            
-            # Cache to state
             st.session_state.update({
-                'vru_df': df,
-                'vru_class': vru_class,
-                'conditions': f"{lighting} + {occlusion}",
-                'crit_fails': len(critical_failures),
-                'iou_fails': len(low_iou_frames)
+                'vru_metrics': sim_data,
+                'active_vru': sim_vru,
+                'active_config': f"{sim_occlusion} | {sim_env}",
+                'safety_failures': len(failed_safety_frames),
+                'iou_failures': len(failed_iou_frames)
             })
-            
-            st.success("Simulation Complete. Proceed to Executive Safety Analytics.")
+            st.success("Test execution complete. Visualization metrics generated in Analytics tab.")
 
 # ==========================================
-# TAB 2: EXECUTIVE ANALYTICS
+# TAB 2: ANALYTICS
 # ==========================================
 with tab_analytics:
-    st.header("VRU Safety Qualification Report")
+    st.header("Perception Diagnostics Matrix")
     
-    if 'vru_df' not in st.session_state:
-        st.warning("Awaiting tracking telemetry. Please execute a simulation in the Runner tab.")
+    if 'vru_metrics' not in st.session_state:
+        st.warning("No evaluation metrics found. Please trigger a regression pass within the Scenario Configuration tab.")
     else:
-        df = st.session_state['vru_df']
-        crit_fails = st.session_state['crit_fails']
-        iou_fails = st.session_state['iou_fails']
+        df = st.session_state['vru_metrics']
+        sf_count = st.session_state['safety_failures']
+        iou_count = st.session_state['iou_failures']
         
-        # Absolute Zero Tolerance Logic
-        if crit_fails > SYS_REQS['max_critical_fn']:
-            status, color = "FAILED: LETHAL REGRESSION", "red"
-        elif iou_fails > 15:
-            status, color = "WARNING: SPATIAL DRIFT", "orange"
+        # Determine strict qualification status
+        if sf_count > SYS_REQS['max_allowable_dropouts']:
+            qual_status, qual_color = "CRITICAL FAIL: TRACK REJECTION", "red"
+        elif iou_count > 35:
+            qual_status, qual_color = "MARGINAL PASS: HIGH SPATIAL DRIFT", "orange"
         else:
-            status, color = "PASSED: SAFE TRACKING", "green"
+            qual_status, qual_color = "PASS: STABLE BOUNDING ENVELOPE", "green"
             
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Target Profile", st.session_state['vru_class'])
-        m2.metric(
-            "Spatial (IoU) Failures", 
-            iou_fails,
-            help="Count of frames where the bounding box was too sloppy. High numbers here mean the car might brake for a pedestrian that is safely on the sidewalk."
-        )
-        m3.metric(
-            "Critical TTC Failures", 
-            crit_fails,
-            help=f"ABSOLUTE METRIC: Count of times the AI lost track of the human when they were less than {SYS_REQS['critical_ttc_seconds']} seconds away. Any number above 0 is a catastrophic failure."
-        )
-        m4.markdown(f"### Status: :{color}[{status}]")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Evaluated Profile", st.session_state['active_vru'])
+        r2.metric("Spatial Alignment Drops (IoU)", iou_count, help="Total execution frames where bounding-box structure dropped below nominal target precision benchmarks.")
+        r3.metric("Danger-Zone Dropouts", sf_count, help="Critical frame instances inside the pre-crash window where target tracking validation was lost.")
+        r4.markdown(f"### Verification Status:\n:{qual_color}[{qual_status}]")
         
         st.divider()
         
-        # --- CHART 1: Confidence vs TTC ---
+        # --- TIME-SERIES COMPONENT VISUALIZATIONS ---
         st.subheader(
-            "Time-to-Collision (TTC) vs. Perception Confidence", 
-            help="**HOW TO READ THIS CHART:**\n\nThe X-Axis is Time to Collision (TTC) moving backwards (from 10 seconds down to 0). As the car gets closer, TTC shrinks. \n\n**WHERE TO FOCUS:** Look at the shaded RED box on the left. This is the 'Danger Zone' (TTC < 2.5s). If the blue line (AI Confidence) dips below the dotted red line while inside that red box, the AI has 'dropped' a human right before hitting them. This is an instant test failure."
+            "Classification Confidence Convergence",
+            help=(
+                "**INSPECTION INSTRUCTIONS:**\n\n"
+                "Focus on the shaded region on the right side of the timeline. This denotes the critical safety perimeter (TTC <= 3.0s). "
+                "The blue trace tracking classification confidence should smoothly scale up towards 1.0 as the target nears the sensor array. "
+                "Any dropouts dipping below the dashed line inside the critical window represent tracking loss, requiring instant logic modification."
+            )
         )
         
-        fig1, ax1 = plt.subplots(figsize=(12, 4))
-        # Plot time backwards (closer to collision)
-        ax1.plot(df["TTC_s"], df["Detection_Confidence"], color="#2980b9", linewidth=2, label="AI Confidence Score")
-        ax1.axhline(y=SYS_REQS['min_confidence'], color="#e74c3c", linestyle="--", label="Confidence Floor (0.85)")
+        fig_c, ax_c = plt.subplots(figsize=(12, 4))
+        ax_c.plot(df["Time_s"], df["Confidence"], color="#1f77b4", linewidth=2.5, label="Model Confidence Signature")
+        ax_c.axhline(y=SYS_REQS['min_confidence'], color="#d62728", linestyle="--", alpha=0.8, label="Validation Limit (0.88)")
         
-        # Highlight the Danger Zone
-        ax1.axvspan(0, SYS_REQS['critical_ttc_seconds'], color='red', alpha=0.1, label="Critical AEB Zone (TTC < 2.5s)")
-        
-        # Highlight critical failures natively
-        if crit_fails > 0:
-            dz = df[df["TTC_s"] < SYS_REQS['critical_ttc_seconds']]
-            c_fails = dz[dz["Detection_Confidence"] < SYS_REQS['min_confidence']]
-            ax1.scatter(c_fails["TTC_s"], c_fails["Detection_Confidence"], color="red", zorder=5, label="Lethal Tracking Dropouts")
+        # Compute critical safety window intersection boundaries
+        if not df[df["TTC_s"] <= SYS_REQS['critical_ttc_seconds']].empty:
+            danger_start_time = df[df["TTC_s"] <= SYS_REQS['critical_ttc_seconds']]["Time_s"].min()
+            ax_c.axvspan(danger_start_time, df["Time_s"].max(), color="#d62728", alpha=0.12, label="Critical AEB Window (TTC <= 3s)")
             
-        ax1.invert_xaxis() # TTC goes from 10 down to 0
-        ax1.set_xlim(10, 0)
-        ax1.set_xlabel("Time to Collision (Seconds)")
-        ax1.set_ylabel("Perception Confidence (0.0 - 1.0)")
-        ax1.legend(loc="lower left")
-        st.pyplot(fig1)
+            # Map critical fail artifacts natively onto plot array
+            dz = df[df["Time_s"] >= danger_start_time]
+            cf_pts = dz[dz["Confidence"] < SYS_REQS['min_confidence']]
+            if not cf_pts.empty:
+                ax_c.scatter(cf_pts["Time_s"], cf_pts["Confidence"], color="#d62728", s=60, zorder=5, label="Critical Dropouts")
+
+        ax_c.set_xlabel("Scenario Timeline (Seconds)")
+        ax_c.set_ylabel("Probability Score")
+        ax_c.set_ylim(-0.05, 1.05)
+        ax_c.legend(loc="upper left")
+        st.pyplot(fig_c)
         
-        # --- CHART 2: Spatial Accuracy (IoU) ---
+        st.divider()
+        
         st.subheader(
-            "Bounding Box Spatial Accuracy (IoU)", 
-            help="**HOW TO READ THIS CHART:**\n\nIntersection over Union (IoU) measures how perfectly the AI's digital box wraps around the actual physical human. 1.0 is a perfect fit.\n\n**WHERE TO FOCUS:** The dotted orange line is the 0.70 safety threshold. If the green line drops below it, the box is 'drifting.' This often happens during partial occlusion (e.g., walking behind a streetlamp), causing the car's path planner to panic."
+            "Spatial Extent Overlap Matrix (IoU)",
+            help=(
+                "**INSPECTION INSTRUCTIONS:**\n\n"
+                "Examine the tracking variance trace across the timeline. Sudden, deep valleys below the dashed orange floor indicate bounding box 'ballooning' or truncation. "
+                "This typically manifests when a target is partially hidden (e.g., a child standing behind a stroller), causing the perception model to alternate between tracking the partial body and the full ensemble."
+            )
         )
         
-        fig2, ax2 = plt.subplots(figsize=(12, 3.5))
-        ax2.plot(df["Time_s"], df["Bounding_Box_IoU"], color="#27ae60", label="Intersection over Union (IoU)")
-        ax2.axhline(y=SYS_REQS['min_iou'], color="#e67e22", linestyle="--", label="IoU Quality Floor (0.70)")
+        fig_i, ax_i = plt.subplots(figsize=(12, 3.5))
+        ax_i.plot(df["Time_s"], df["IoU"], color="#2ca02c", linewidth=2, label="Intersection over Union Trace")
+        ax_i.axhline(y=SYS_REQS['min_iou'], color="#ff7f0e", linestyle="--", alpha=0.8, label="Spatial Quality Floor (0.75)")
         
-        ax2.set_xlabel("Elapsed Simulation Time (Seconds)")
-        ax2.set_ylabel("Spatial Accuracy (IoU)")
-        ax2.legend(loc="lower right")
-        st.pyplot(fig2)
+        ax_i.set_xlabel("Scenario Timeline (Seconds)")
+        ax_i.set_ylabel("IoU Accuracy Match")
+        ax_i.set_ylim(-0.05, 1.05)
+        ax_i.legend(loc="upper left")
+        st.pyplot(fig_i)
