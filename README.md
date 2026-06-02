@@ -1,6 +1,6 @@
 https://vru-perception-engine.streamlit.app/
 
-# Executive Summary: VRU Perception Pipeline (Vision Edge)
+# Executive Summary: VRU Perception Engine
 **Architecture:** High-Uncertainty Edge Case Labeling & Prediction  
 **Data Horizon:** Pedestrian & Micromobility Kinematics  
 **Core Objective:** Occlusion Handling & Dynamic Safety Buffering  
