@@ -1,6 +1,5 @@
-https://vru-perception-engine.streamlit.app/
-
-# Executive Summary: VRU Perception Engine
+# VRU Perception Detection & Safety Verification Suite
+**Live Dashboard:** [vru-perception-engine.streamlit.app](https://vru-perception-engine.streamlit.app/)  
 **Architecture:** High-Uncertainty Edge Case Labeling & Prediction  
 **Data Horizon:** Pedestrian & Micromobility Kinematics  
 **Core Objective:** Occlusion Handling & Dynamic Safety Buffering  
@@ -9,7 +8,7 @@ https://vru-perception-engine.streamlit.app/
 
 ## 1. Operational Findings & Statistical Summary
 
-The Vision Edge pipeline ingests raw bounding box data to identify and prioritize vulnerable road users (VRUs) exhibiting high-uncertainty or erratic trajectories.
+The perception verification pipeline ingests raw bounding box data to identify and prioritize vulnerable road users (VRUs) exhibiting high-uncertainty or erratic trajectories.
 
 | Metric | Value | Operational Status |
 | :--- | :--- | :--- |
@@ -32,7 +31,7 @@ The pipeline focuses on isolating frames where standard AI models struggle, prio
 
 ### Phase A: Bounding Box Ingestion
 ```python
-class VisionEdgePipeline:
+class VRUPerceptionPipeline:
     def __init__(self, perception_logs):
         self.logs = pd.read_json(perception_logs)
 ```
@@ -59,7 +58,7 @@ class VisionEdgePipeline:
 
 ## 3. Executive Conclusion & Next Steps
 
-The VRU Perception Engine represents the most critical safety layer for urban autonomy. By proactively managing occlusion and expanding buffers based on predicted intent, we reduce the probability of catastrophic contact with vulnerable humans.
+The VRU Perception Suite represents the most critical safety layer for urban autonomy. By proactively managing occlusion and expanding buffers based on predicted intent, we reduce the probability of catastrophic contact with vulnerable humans.
 
 **Next Phase Directives:**
 * **Intent Recognition:** Upgrade the pipeline to analyze pedestrian head-pose (looking at the street vs. looking at a phone) to better predict sudden jaywalking.
